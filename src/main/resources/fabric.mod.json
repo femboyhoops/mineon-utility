@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "id": "oretracker",
+  "version": "1.0.0",
+  "name": "Ore Tracker",
+  "description": "Client-side progression tracker for MineOn. Does not include elytra prices.",
+  "authors": ["Hoops"],
+  "environment": "client",
+  "entrypoints": {
+    "client": [
+      "com.hoops.oretracker.client.OreTrackerClient"
+    ]
+  },
+  "depends": {
+    "fabricloader": ">=0.18.1",
+    "minecraft": "1.21.11",
+    "fabric-api": "*"
+  }
+}
