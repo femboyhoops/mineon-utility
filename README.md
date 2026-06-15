@@ -38,7 +38,7 @@ Ore Tracker is a client-side Fabric mod for Minecraft 1.21.11 that tracks ore pr
 
 ## Notes
 
-Ore Tracker scans your inventory and hotbar only. It does not scan shulkers, backpacks, ender chests, armor slots, or offhand.
+Ore Tracker scans your inventory and hotbar only. 
 
 ## License
 
