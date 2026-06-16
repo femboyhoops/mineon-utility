@@ -16,30 +16,47 @@ public final class OreTrackerWebhook {
     private OreTrackerWebhook() {
     }
 
-    public static void sendStart(String webhookUrl, String time) {
+    public static void sendStart(String webhookUrl, String time, String trackedPlayer) {
         Map<String, Object> embed = new LinkedHashMap<>();
         embed.put("title", "Ore Tracker Started");
-        embed.put("description", "Tracking has started. Death tracking will automatically stop when you die.");
+        embed.put("description", "Starting tracking.");
         embed.put("color", 0x8B5CF6);
 
         embed.put("fields", List.of(
-                field("Started At", "`" + time + "`", true),
+                field("Player", "`" + safe(trackedPlayer) + "`", true),
+                field("Started At", "`" + safe(time) + "`", true),
                 field("Status", "`Tracking Active`", true)
         ));
 
         sendEmbed(webhookUrl, embed);
     }
 
-    public static void sendDeath(String webhookUrl, String time, String attacker, String resourcesSummary) {
+    public static void sendStop(String webhookUrl, String time, String trackedPlayer) {
+        Map<String, Object> embed = new LinkedHashMap<>();
+        embed.put("title", "Ore Tracker Stopped");
+        embed.put("description", "Tracking was stopped manually.");
+        embed.put("color", 0xF59E0B);
+
+        embed.put("fields", List.of(
+                field("Player", "`" + safe(trackedPlayer) + "`", true),
+                field("Stopped At", "`" + safe(time) + "`", true),
+                field("Status", "`Tracking Inactive`", true)
+        ));
+
+        sendEmbed(webhookUrl, embed);
+    }
+
+    public static void sendDeath(String webhookUrl, String time, String trackedPlayer, String attacker, String resourcesSummary) {
         Map<String, Object> embed = new LinkedHashMap<>();
         embed.put("title", "Ore Tracker Death Log");
         embed.put("description", "Tracking has stopped automatically.");
         embed.put("color", 0xEF4444);
 
         embed.put("fields", List.of(
-                field("Time of Death", "`" + time + "`", true),
-                field("Killed By", "`" + attacker + "`", true),
-                field("Resources", resourcesSummary, false)
+                field("Player", "`" + safe(trackedPlayer) + "`", true),
+                field("Time of Death", "`" + safe(time) + "`", true),
+                field("Killed By", "`" + safe(attacker) + "`", true),
+                field("Resources", resourcesSummary == null || resourcesSummary.isBlank() ? "`None detected`" : resourcesSummary, false)
         ));
 
         sendEmbed(webhookUrl, embed);
@@ -75,6 +92,17 @@ public final class OreTrackerWebhook {
         field.put("value", value);
         field.put("inline", inline);
         return field;
+    }
+
+    private static String safe(String value) {
+        if (value == null || value.isBlank()) {
+            return "Unknown";
+        }
+
+        return value
+                .replace("`", "'")
+                .replace("@", "@\u200B")
+                .trim();
     }
 
     private static boolean isValidWebhook(String webhookUrl) {

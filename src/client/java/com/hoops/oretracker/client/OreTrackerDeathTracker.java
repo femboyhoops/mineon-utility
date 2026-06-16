@@ -24,6 +24,8 @@ public final class OreTrackerDeathTracker {
     private static String cachedAttacker = "Unknown";
     private static long cachedAttackerTime = 0L;
 
+    private static String trackedPlayerName = "Unknown";
+
     private OreTrackerDeathTracker() {
     }
 
@@ -43,15 +45,17 @@ public final class OreTrackerDeathTracker {
     public static void start(String webhook) {
         OreTrackerSavedSettings.setDiscordWebhook(webhook);
 
+        Minecraft client = Minecraft.getInstance();
+
+        trackedPlayerName = client.player == null ? "Unknown" : getRealPlayerName(client.player);
+
         tracking = true;
         wasAlive = true;
         lastHealth = -1.0f;
         cachedAttacker = "Unknown";
         cachedAttackerTime = 0L;
 
-        OreTrackerWebhook.sendStart(webhook, now());
-
-        Minecraft client = Minecraft.getInstance();
+        OreTrackerWebhook.sendStart(webhook, now(), trackedPlayerName);
 
         if (client.player != null) {
             lastHealth = client.player.getHealth();
@@ -60,13 +64,19 @@ public final class OreTrackerDeathTracker {
     }
 
     public static void stop(boolean sendMessage) {
+        Minecraft client = Minecraft.getInstance();
+
+        if (tracking) {
+            String webhook = OreTrackerSavedSettings.getDiscordWebhook();
+            String playerName = client.player == null ? trackedPlayerName : getRealPlayerName(client.player);
+            OreTrackerWebhook.sendStop(webhook, now(), playerName);
+        }
+
         tracking = false;
         wasAlive = true;
         lastHealth = -1.0f;
         cachedAttacker = "Unknown";
         cachedAttackerTime = 0L;
-
-        Minecraft client = Minecraft.getInstance();
 
         if (sendMessage && client.player != null) {
             client.player.displayClientMessage(Component.literal("Ore Tracker death tracking stopped."), false);
@@ -130,12 +140,14 @@ public final class OreTrackerDeathTracker {
 
     private static void handleDeath(Minecraft client, LocalPlayer player) {
         String webhook = OreTrackerSavedSettings.getDiscordWebhook();
+        String playerName = getRealPlayerName(player);
         String attacker = getAttackerName(client, player);
         ResourceSnapshot resources = ResourceSnapshot.capture(player);
 
         OreTrackerWebhook.sendDeath(
                 webhook,
                 now(),
+                playerName,
                 attacker,
                 resources.toDiscordField()
         );
@@ -172,7 +184,7 @@ public final class OreTrackerDeathTracker {
     }
 
     private static String getAttackerFromDamageSource(LocalPlayer player) {
-        String selfName = cleanName(player.getName().getString());
+        String selfName = cleanName(getRealPlayerName(player));
 
         Object damageSource = call(player, "getLastDamageSource");
 
@@ -224,7 +236,7 @@ public final class OreTrackerDeathTracker {
             return "Unknown";
         }
 
-        String selfName = cleanName(player.getName().getString());
+        String selfName = cleanName(getRealPlayerName(player));
 
         AbstractClientPlayer closest = null;
         double closestDistance = Double.MAX_VALUE;
@@ -234,7 +246,7 @@ public final class OreTrackerDeathTracker {
                 continue;
             }
 
-            String otherName = other.getName().getString();
+            String otherName = getRealPlayerName(other);
 
             if (cleanName(otherName).equals(selfName)) {
                 continue;
@@ -252,7 +264,7 @@ public final class OreTrackerDeathTracker {
             return "Unknown";
         }
 
-        return closest.getName().getString();
+        return getRealPlayerName(closest);
     }
 
     private static String getEntityName(Object object, String selfName) {
@@ -260,17 +272,50 @@ public final class OreTrackerDeathTracker {
             return "Unknown";
         }
 
-        String name = entity.getName().getString();
+        String displayName = sanitizeVisibleName(entity.getName().getString());
 
-        if (name == null || name.isBlank()) {
+        if (isUsableName(displayName) && !cleanName(displayName).equals(selfName)) {
+            return displayName;
+        }
+
+        if (entity instanceof AbstractClientPlayer player) {
+            String profileName = sanitizeVisibleName(player.getGameProfile().name());
+
+            if (isUsableName(profileName) && !cleanName(profileName).equals(selfName)) {
+                return profileName;
+            }
+        }
+
+        String scoreboardName = sanitizeVisibleName(callString(entity, "getScoreboardName"));
+
+        if (isUsableName(scoreboardName) && !cleanName(scoreboardName).equals(selfName)) {
+            return scoreboardName;
+        }
+
+        return "Unknown";
+    }
+
+    private static String getRealPlayerName(AbstractClientPlayer player) {
+        if (player == null) {
             return "Unknown";
         }
 
-        if (cleanName(name).equals(selfName)) {
-            return "Unknown";
+        try {
+            String profileName = sanitizeVisibleName(player.getGameProfile().name());
+
+            if (isUsableName(profileName)) {
+                return profileName;
+            }
+        } catch (Exception ignored) {
         }
 
-        return name;
+        String displayName = sanitizeVisibleName(player.getName().getString());
+
+        if (isUsableName(displayName)) {
+            return displayName;
+        }
+
+        return "Unknown";
     }
 
     private static Object call(Object object, String methodName) {
@@ -294,9 +339,14 @@ public final class OreTrackerDeathTracker {
         }
     }
 
+    private static String callString(Object object, String methodName) {
+        Object result = call(object, methodName);
+        return result == null ? "" : String.valueOf(result);
+    }
+
     private static String getAttackerFromDeathMessage(LocalPlayer player) {
         String message;
-        String selfOriginal = player.getName().getString();
+        String selfOriginal = getRealPlayerName(player);
         String selfName = cleanName(selfOriginal);
 
         try {
@@ -342,10 +392,7 @@ public final class OreTrackerDeathTracker {
             return "Unknown";
         }
 
-        String value = input
-                .replace(".", "")
-                .replace("!", "")
-                .trim();
+        String value = sanitizeVisibleName(input);
 
         if (value.isBlank()) {
             return "Unknown";
@@ -363,6 +410,12 @@ public final class OreTrackerDeathTracker {
             value = value.substring(0, value.indexOf("'s ")).trim();
         }
 
+        value = sanitizeVisibleName(value);
+
+        if (!isUsableName(value)) {
+            return "Unknown";
+        }
+
         if (value.equalsIgnoreCase(selfOriginal) || cleanName(value).equals(selfName)) {
             return "Unknown";
         }
@@ -374,8 +427,39 @@ public final class OreTrackerDeathTracker {
         return value.isBlank() ? "Unknown" : value;
     }
 
+    private static boolean isUsableName(String input) {
+        if (input == null) {
+            return false;
+        }
+
+        String value = input.trim();
+
+        if (value.isBlank()) {
+            return false;
+        }
+
+        return value.matches(".*[A-Za-z0-9_].*");
+    }
+
+    private static String sanitizeVisibleName(String input) {
+        if (input == null) {
+            return "";
+        }
+
+        String stripped = stripFormatting(input)
+                .replaceAll("[^A-Za-z0-9_ .\\-]", "")
+                .replaceAll("\\s+", " ")
+                .trim();
+
+        if (!stripped.matches(".*[A-Za-z0-9_].*")) {
+            return "";
+        }
+
+        return stripped;
+    }
+
     private static String cleanName(String input) {
-        return stripFormatting(input).trim().toLowerCase(Locale.ROOT);
+        return sanitizeVisibleName(input).trim().toLowerCase(Locale.ROOT);
     }
 
     private static String stripFormatting(String input) {
@@ -383,7 +467,11 @@ public final class OreTrackerDeathTracker {
             return "";
         }
 
-        return input.replaceAll("§.", "");
+        return input
+                .replaceAll("(?i)§[0-9A-FK-OR]", "")
+                .replaceAll("(?i)&[0-9A-FK-OR]", "")
+                .replace("§", "")
+                .replace("&", "");
     }
 
     private static String now() {
@@ -470,7 +558,8 @@ public final class OreTrackerDeathTracker {
             }
 
             return input
-                    .replaceAll("§.", "")
+                    .replaceAll("(?i)§[0-9A-FK-OR]", "")
+                    .replaceAll("(?i)&[0-9A-FK-OR]", "")
                     .toLowerCase(Locale.ROOT)
                     .replace("_", " ")
                     .replace("-", " ")
@@ -589,3 +678,4 @@ public final class OreTrackerDeathTracker {
         }
     }
 }
+
