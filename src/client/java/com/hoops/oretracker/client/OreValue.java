@@ -31,3 +31,5 @@ public record OreValue(
         return new OreValue(0, 0, 0, 0, 0, 0);
     }
 }
+
+

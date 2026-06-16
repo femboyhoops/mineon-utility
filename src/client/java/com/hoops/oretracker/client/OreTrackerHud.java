@@ -1,6 +1,7 @@
 package com.hoops.oretracker.client;
 
 import net.fabricmc.fabric.api.client.rendering.v1.HudRenderCallback;
+
 import net.minecraft.client.DeltaTracker;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.Font;
@@ -717,3 +718,7 @@ public final class OreTrackerHud {
 
     private record Position(int x, int y) {}
 }
+
+
+
+
