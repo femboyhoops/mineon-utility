@@ -2,178 +2,174 @@ package com.hoops.oretracker.client;
 
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
+import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.screens.Screen;
-import net.minecraft.client.input.MouseButtonEvent;
 import net.minecraft.network.chat.Component;
 
 public final class OreTrackerWebhookScreen extends Screen {
-    private static final int PANEL_WIDTH = 460;
-    private static final int PANEL_HEIGHT = 246;
+    private static final int BACKDROP = 0xD0100718;
+    private static final int PANEL_BG = 0xF0140A22;
+    private static final int PANEL_BORDER = 0xFF7C3AED;
+    private static final int PANEL_BORDER_DARK = 0xFF3B1A68;
+    private static final int TEXT_PRIMARY = 0xFFFFFFFF;
+    private static final int TEXT_MUTED = 0xFFC9B8FF;
+    private static final int TEXT_DIM = 0xFF9D8BC7;
+    private static final int STATUS_OK = 0xFFA7F3D0;
+    private static final int STATUS_ERROR = 0xFFFCA5A5;
 
     private EditBox webhookBox;
-    private Hitbox startButton;
-    private Hitbox cancelButton;
+    private EditBox discordUserIdBox;
+    private String status = "";
+    private int statusColor = STATUS_OK;
 
     public OreTrackerWebhookScreen() {
-        super(Component.literal("Ore Tracker Death Tracking"));
+        super(Component.literal("Ore Tracker Discord Alerts"));
     }
 
     @Override
     protected void init() {
-        int panelX = (this.width - PANEL_WIDTH) / 2;
-        int panelY = (this.height - PANEL_HEIGHT) / 2;
+        int boxWidth = Math.min(430, this.width - 40);
+        int x = (this.width - boxWidth) / 2;
+        int y = Math.max(42, this.height / 2 - 92);
 
-        webhookBox = new EditBox(
+        this.webhookBox = new EditBox(
                 this.font,
-                panelX + 32,
-                panelY + 103,
-                PANEL_WIDTH - 64,
-                24,
-                Component.literal("Discord Webhook")
+                x + 12,
+                y + 52,
+                boxWidth - 24,
+                20,
+                Component.literal("Discord webhook URL")
         );
+        this.webhookBox.setMaxLength(2048);
+        this.webhookBox.setValue(nullToEmpty(OreTrackerSavedSettings.getDiscordWebhook()));
+        this.webhookBox.setHint(Component.literal("Discord webhook URL"));
+        this.webhookBox.setTextColor(0xFFFFFFFF);
+        this.webhookBox.setTextColorUneditable(0xFF9CA3AF);
+        this.addRenderableWidget(this.webhookBox);
 
-        webhookBox.setMaxLength(512);
-        webhookBox.setValue(OreTrackerSavedSettings.getDiscordWebhook());
-        webhookBox.setHint(Component.literal("https://discord.com/api/webhooks/..."));
+        this.discordUserIdBox = new EditBox(
+                this.font,
+                x + 12,
+                y + 106,
+                boxWidth - 24,
+                20,
+                Component.literal("Discord user ID optional")
+        );
+        this.discordUserIdBox.setMaxLength(20);
+        this.discordUserIdBox.setValue(getSavedDiscordUserIdSafely());
+        this.discordUserIdBox.setHint(Component.literal("Optional Discord user ID for pings"));
+        this.discordUserIdBox.setTextColor(0xFFFFFFFF);
+        this.discordUserIdBox.setTextColorUneditable(0xFF9CA3AF);
+        this.addRenderableWidget(this.discordUserIdBox);
 
-        this.addRenderableWidget(webhookBox);
+        this.addRenderableWidget(Button.builder(Component.literal("Start Tracking"), button -> startTracking())
+                .bounds(x + 12, y + 150, boxWidth - 24, 20)
+                .build());
 
-        startButton = new Hitbox(panelX + 32, panelY + 165, 186, 34);
-        cancelButton = new Hitbox(panelX + PANEL_WIDTH - 218, panelY + 165, 186, 34);
+        this.addRenderableWidget(Button.builder(Component.literal("Stop Tracking"), button -> {
+                    OreTrackerDeathTracker.stop(true);
+                    setStatus("Tracking stopped.", false);
+                })
+                .bounds(x + 12, y + 176, (boxWidth - 32) / 2, 20)
+                .build());
+
+        this.addRenderableWidget(Button.builder(Component.literal("Done"), button -> onClose())
+                .bounds(x + 20 + (boxWidth - 32) / 2, y + 176, (boxWidth - 32) / 2, 20)
+                .build());
+    }
+
+    private void startTracking() {
+        String webhook = nullToEmpty(this.webhookBox.getValue()).trim();
+        String rawDiscordUserId = nullToEmpty(this.discordUserIdBox.getValue()).trim();
+        String discordUserId = cleanDiscordUserId(rawDiscordUserId);
+
+        if (webhook.isBlank()) {
+            setStatus("Paste a Discord webhook URL first.", true);
+            return;
+        }
+
+        if (!rawDiscordUserId.isBlank() && discordUserId.isBlank()) {
+            setStatus("Discord user ID must be numeric and 17-20 digits, or blank.", true);
+            return;
+        }
+
+        OreTrackerDeathTracker.start(webhook, discordUserId);
+        setStatus(discordUserId.isBlank()
+                ? "Tracking started. Pings are disabled."
+                : "Tracking started. Discord pings are enabled.", false);
     }
 
     @Override
     public void render(GuiGraphics graphics, int mouseX, int mouseY, float delta) {
-        graphics.fill(0, 0, this.width, this.height, 0xD9040208);
+        // Do not call renderBackground() here on Feather/1.21.11.
+        // Feather can already apply blur in the same frame, and calling Minecraft's
+        // blurred background again can crash with "Can only blur once per frame".
+        graphics.fill(0, 0, this.width, this.height, BACKDROP);
 
-        int panelX = (this.width - PANEL_WIDTH) / 2;
-        int panelY = (this.height - PANEL_HEIGHT) / 2;
+        int boxWidth = Math.min(430, this.width - 40);
+        int x = (this.width - boxWidth) / 2;
+        int y = Math.max(42, this.height / 2 - 92);
+        int panelHeight = 218;
 
-        drawPanel(graphics, panelX, panelY, PANEL_WIDTH, PANEL_HEIGHT);
+        drawPanel(graphics, x, y, boxWidth, panelHeight);
 
-        graphics.drawString(this.font, "ORE TRACKER", panelX + 32, panelY + 24, 0xFFF8F2FF, false);
-        graphics.drawString(this.font, "Death Webhook Tracking", panelX + 32, panelY + 40, 0xFFC7A7FF, false);
+        graphics.drawCenteredString(this.font, this.title, this.width / 2, y + 14, TEXT_PRIMARY);
+        graphics.drawCenteredString(this.font, "Webhook alerts, optional Discord pings, damage warnings, and death chat context.", this.width / 2, y + 28, TEXT_DIM);
 
-        drawStatusPill(graphics, panelX + PANEL_WIDTH - 143, panelY + 25);
+        graphics.drawString(this.font, "Discord Webhook", x + 12, y + 42, TEXT_MUTED, false);
+        graphics.drawString(this.font, "Discord User ID (optional)", x + 12, y + 96, TEXT_MUTED, false);
+        graphics.drawString(this.font, "Leave blank if you do not want <@user> pings.", x + 12, y + 130, TEXT_DIM, false);
 
-        graphics.drawString(this.font, "Paste your Discord webhook below.", panelX + 32, panelY + 70, 0xFFE6DBFF, false);
-        graphics.drawString(this.font, "The webhook is saved locally and reused next time.", panelX + 32, panelY + 83, 0xFF9F91B8, false);
-
-        graphics.drawString(this.font, "Webhook URL", panelX + 32, panelY + 92, 0xFFEDE3FF, false);
-
-        drawButton(graphics, startButton, OreTrackerDeathTracker.isTracking() ? "Restart Tracking" : "Start Tracking", startButton.contains(mouseX, mouseY), true, true);
-        drawButton(graphics, cancelButton, "Cancel", cancelButton.contains(mouseX, mouseY), true, false);
-
-        graphics.drawString(this.font, "Sends start time, death time, killer, and HC/MC/UC/SC/C/N inventory counts.", panelX + 32, panelY + 214, 0xFF9E90B8, false);
+        if (this.status != null && !this.status.isBlank()) {
+            graphics.drawCenteredString(this.font, this.status, this.width / 2, y + 202, this.statusColor);
+        }
 
         super.render(graphics, mouseX, mouseY, delta);
     }
 
     @Override
-    public boolean mouseClicked(MouseButtonEvent event, boolean doubled) {
-        int mouseX = (int) event.x();
-        int mouseY = (int) event.y();
-
-        if (startButton != null && startButton.contains(mouseX, mouseY)) {
-            String webhook = webhookBox.getValue().trim();
-
-            if (!isValidWebhook(webhook)) {
-                sendClientMessage("Paste a valid Discord webhook first.");
-                return true;
-            }
-
-            OreTrackerDeathTracker.start(webhook);
-            Minecraft.getInstance().setScreen(null);
-            return true;
-        }
-
-        if (cancelButton != null && cancelButton.contains(mouseX, mouseY)) {
-            Minecraft.getInstance().setScreen(null);
-            return true;
-        }
-
-        return super.mouseClicked(event, doubled);
-    }
-
-    private void drawPanel(GuiGraphics graphics, int x, int y, int width, int height) {
-        graphics.fill(x - 3, y - 3, x + width + 3, y + height + 3, 0xFF5F32B6);
-        graphics.fill(x - 2, y - 2, x + width + 2, y + height + 2, 0xFFB68CFF);
-        graphics.fill(x, y, x + width, y + height, 0xFF0D0814);
-
-        graphics.fill(x, y, x + width, y + 4, 0xFFA855F7);
-        graphics.fill(x, y + 4, x + width, y + 44, 0xFF130B20);
-
-        graphics.fill(x + 24, y + 58, x + width - 24, y + 59, 0xFF372252);
-        graphics.fill(x + 24, y + 145, x + width - 24, y + 146, 0xFF2B1A3F);
-    }
-
-    private void drawStatusPill(GuiGraphics graphics, int x, int y) {
-        boolean active = OreTrackerDeathTracker.isTracking();
-
-        String label = active ? "TRACKING" : "INACTIVE";
-        int bg = active ? 0xFF301D46 : 0xFF191120;
-        int border = active ? 0xFFA855F7 : 0xFF5B4A70;
-        int text = active ? 0xFFEEDBFF : 0xFFB8A9C9;
-
-        graphics.fill(x, y, x + 111, y + 20, border);
-        graphics.fill(x + 1, y + 1, x + 110, y + 19, bg);
-
-        graphics.drawString(this.font, label, x + (111 - this.font.width(label)) / 2, y + 6, text, false);
-    }
-
-    private void drawButton(GuiGraphics graphics, Hitbox box, String label, boolean hovered, boolean enabled, boolean primary) {
-        int bg;
-
-        if (!enabled) {
-            bg = 0xFF17111F;
-        } else if (primary) {
-            bg = hovered ? 0xFFA855F7 : 0xFF7C3AED;
-        } else {
-            bg = hovered ? 0xFF35214C : 0xFF21172E;
-        }
-
-        int border = hovered ? 0xFFE4CCFF : primary ? 0xFFC4A0FF : 0xFF5D4A73;
-        int text = enabled ? 0xFFFFFFFF : 0xFF7D718F;
-
-        graphics.fill(box.x, box.y, box.x + box.width, box.y + box.height, border);
-        graphics.fill(box.x + 1, box.y + 1, box.x + box.width - 1, box.y + box.height - 1, bg);
-
-        int textX = box.x + (box.width - this.font.width(label)) / 2;
-        int textY = box.y + 12;
-
-        graphics.drawString(this.font, label, textX, textY, text, false);
-    }
-
-    private boolean isValidWebhook(String webhook) {
-        return webhook != null
-                && (webhook.startsWith("https://discord.com/api/webhooks/")
-                || webhook.startsWith("https://discordapp.com/api/webhooks/"));
-    }
-
-    private void sendClientMessage(String message) {
+    public void onClose() {
         Minecraft client = Minecraft.getInstance();
+        client.setScreen(null);
+    }
 
-        if (client.player != null) {
-            client.player.displayClientMessage(Component.literal(message), false);
+    private void setStatus(String value, boolean error) {
+        this.status = value == null ? "" : value;
+        this.statusColor = error ? STATUS_ERROR : STATUS_OK;
+    }
+
+    private static void drawPanel(GuiGraphics graphics, int x, int y, int width, int height) {
+        graphics.fill(x - 2, y - 2, x + width + 2, y + height + 2, 0x88000000);
+        graphics.fill(x, y, x + width, y + height, PANEL_BORDER_DARK);
+        graphics.fill(x + 1, y + 1, x + width - 1, y + height - 1, PANEL_BG);
+        graphics.fill(x + 1, y + 1, x + width - 1, y + 3, PANEL_BORDER);
+        graphics.fill(x + 1, y + height - 2, x + width - 1, y + height - 1, 0xAA000000);
+    }
+
+    private static String getSavedDiscordUserIdSafely() {
+        try {
+            return OreTrackerDeathTracker.getSavedDiscordUserIdForUi();
+        } catch (Throwable ignored) {
+            return "";
         }
     }
 
-    private static final class Hitbox {
-        private final int x;
-        private final int y;
-        private final int width;
-        private final int height;
-
-        private Hitbox(int x, int y, int width, int height) {
-            this.x = x;
-            this.y = y;
-            this.width = width;
-            this.height = height;
+    private static String cleanDiscordUserId(String input) {
+        if (input == null) {
+            return "";
         }
 
-        private boolean contains(int mouseX, int mouseY) {
-            return mouseX >= x && mouseX <= x + width && mouseY >= y && mouseY <= y + height;
+        String cleaned = input.trim().replaceAll("[^0-9]", "");
+
+        if (cleaned.length() < 17 || cleaned.length() > 20) {
+            return "";
         }
+
+        return cleaned;
+    }
+
+    private static String nullToEmpty(String value) {
+        return value == null ? "" : value;
     }
 }

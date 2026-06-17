@@ -11,20 +11,36 @@ import net.minecraft.world.item.ItemStack;
 import java.lang.reflect.Method;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 
 public final class OreTrackerDeathTracker {
     private static final DateTimeFormatter TIME_FORMAT = DateTimeFormatter.ofPattern("M/d/yy h:mm a");
+    private static final long ATTACKER_CACHE_MS = 15000L;
+    private static final long DAMAGE_WARNING_COOLDOWN_MS = 10000L;
+
+    /*
+     * Keep this false unless you are okay with guesses.
+     * Nearest-player fallback is the exact thing that caused false killer reports.
+     */
+    private static final boolean ALLOW_NEAREST_PLAYER_FALLBACK = false;
+    private static final double NEAREST_PLAYER_FALLBACK_RANGE = 6.0D;
 
     private static boolean tracking = false;
     private static boolean wasAlive = true;
     private static boolean registered = false;
 
     private static float lastHealth = -1.0f;
+    private static int lastHurtTime = 0;
+    private static long lastDamageWarningTime = 0L;
     private static String cachedAttacker = "Unknown";
     private static long cachedAttackerTime = 0L;
 
     private static String trackedPlayerName = "Unknown";
+    private static String trackedDiscordUserId = "";
 
     private OreTrackerDeathTracker() {
     }
@@ -35,6 +51,7 @@ public final class OreTrackerDeathTracker {
         }
 
         registered = true;
+        OreTrackerChatLogBuffer.register();
         ClientTickEvents.END_CLIENT_TICK.register(client -> tick());
     }
 
@@ -43,7 +60,14 @@ public final class OreTrackerDeathTracker {
     }
 
     public static void start(String webhook) {
+        start(webhook, readSavedDiscordUserId());
+    }
+
+    public static void start(String webhook, String discordUserId) {
+        trackedDiscordUserId = cleanDiscordUserId(discordUserId);
+
         OreTrackerSavedSettings.setDiscordWebhook(webhook);
+        writeSavedDiscordUserId(trackedDiscordUserId);
 
         Minecraft client = Minecraft.getInstance();
 
@@ -52,13 +76,16 @@ public final class OreTrackerDeathTracker {
         tracking = true;
         wasAlive = true;
         lastHealth = -1.0f;
+        lastHurtTime = 0;
+        lastDamageWarningTime = 0L;
         cachedAttacker = "Unknown";
         cachedAttackerTime = 0L;
 
-        OreTrackerWebhook.sendStart(webhook, now(), trackedPlayerName);
+        OreTrackerWebhook.sendStart(webhook, now(), trackedPlayerName, trackedDiscordUserId);
 
         if (client.player != null) {
             lastHealth = client.player.getHealth();
+            lastHurtTime = client.player.hurtTime;
             client.player.displayClientMessage(Component.literal("Ore Tracker death tracking started."), false);
         }
     }
@@ -69,12 +96,14 @@ public final class OreTrackerDeathTracker {
         if (tracking) {
             String webhook = OreTrackerSavedSettings.getDiscordWebhook();
             String playerName = client.player == null ? trackedPlayerName : getRealPlayerName(client.player);
-            OreTrackerWebhook.sendStop(webhook, now(), playerName);
+            OreTrackerWebhook.sendStop(webhook, now(), playerName, trackedDiscordUserId);
         }
 
         tracking = false;
         wasAlive = true;
         lastHealth = -1.0f;
+        lastHurtTime = 0;
+        lastDamageWarningTime = 0L;
         cachedAttacker = "Unknown";
         cachedAttackerTime = 0L;
 
@@ -111,24 +140,33 @@ public final class OreTrackerDeathTracker {
 
     private static void cachePossibleAttacker(Minecraft client, LocalPlayer player) {
         float currentHealth = player.getHealth();
+        int currentHurtTime = player.hurtTime;
 
         if (lastHealth < 0.0f) {
             lastHealth = currentHealth;
+            lastHurtTime = currentHurtTime;
             return;
         }
 
-        boolean tookDamage = currentHealth < lastHealth || player.hurtTime > 0;
+        boolean healthDropped = currentHealth < lastHealth;
+        boolean hurtJustStarted = currentHurtTime > 0 && lastHurtTime <= 0;
+        boolean tookDamage = healthDropped || hurtJustStarted;
 
         if (!tookDamage) {
             lastHealth = currentHealth;
+            lastHurtTime = currentHurtTime;
             return;
         }
 
-        String attacker = getAttackerFromDamageSource(player);
+        sendDamageWarningIfReady(player, currentHealth);
 
-        if (attacker.equals("Unknown")) {
-            attacker = getNearestPlayer(client, player);
-        }
+        /*
+         * Important:
+         * Do NOT cache the nearest player here. Damage can come from fall damage,
+         * fire, lava, suffocation, poison, mobs, projectiles, or server mechanics.
+         * Guessing by proximity is worse than returning Unknown.
+         */
+        String attacker = getAttackerFromDamageSource(player);
 
         if (!attacker.equals("Unknown")) {
             cachedAttacker = attacker;
@@ -136,25 +174,170 @@ public final class OreTrackerDeathTracker {
         }
 
         lastHealth = currentHealth;
+        lastHurtTime = currentHurtTime;
+    }
+
+    private static void sendDamageWarningIfReady(LocalPlayer player, float currentHealth) {
+        long now = System.currentTimeMillis();
+
+        if (now - lastDamageWarningTime < DAMAGE_WARNING_COOLDOWN_MS) {
+            return;
+        }
+
+        lastDamageWarningTime = now;
+
+        String webhook = OreTrackerSavedSettings.getDiscordWebhook();
+        String playerName = getRealPlayerName(player);
+
+        OreTrackerWebhook.sendDamageWarning(
+                webhook,
+                now(),
+                playerName,
+                currentHealth,
+                trackedDiscordUserId
+        );
     }
 
     private static void handleDeath(Minecraft client, LocalPlayer player) {
         String webhook = OreTrackerSavedSettings.getDiscordWebhook();
         String playerName = getRealPlayerName(player);
         String attacker = getAttackerName(client, player);
-        ResourceSnapshot resources = ResourceSnapshot.capture(player);
+        String deathTime = now();
+        String resources = ResourceSnapshot.capture(player).toDiscordField();
+        String[] onlinePlayerNames = getOnlinePlayerNames(client, player);
+        String selfName = cleanName(playerName);
+        String discordUserId = trackedDiscordUserId;
 
-        OreTrackerWebhook.sendDeath(
-                webhook,
-                now(),
-                playerName,
-                attacker,
-                resources.toDiscordField()
-        );
+        /*
+         * Death chat can arrive a few ticks after the local death state flips.
+         * Capture inventory/resources immediately, but delay the webhook briefly
+         * so the visible server death line can be included in the report.
+         */
+        CompletableFuture.runAsync(() -> {
+            String recentChat = OreTrackerChatLogBuffer.snapshotForDiscord(6);
+            String finalAttacker = attacker;
+
+            if (finalAttacker.equals("Unknown")) {
+                String chatAttacker = getAttackerFromRecentChat(recentChat, onlinePlayerNames, selfName);
+
+                if (!chatAttacker.equals("Unknown")) {
+                    finalAttacker = chatAttacker + " (from recent chat)";
+                }
+            }
+
+            OreTrackerWebhook.sendDeath(
+                    webhook,
+                    deathTime,
+                    playerName,
+                    finalAttacker,
+                    resources,
+                    discordUserId,
+                    recentChat
+            );
+        }, CompletableFuture.delayedExecutor(1200L, TimeUnit.MILLISECONDS));
 
         if (client.player != null) {
-            client.player.displayClientMessage(Component.literal("Ore Tracker death log sent. Tracking stopped."), false);
+            client.player.displayClientMessage(Component.literal("Ore Tracker death log queued. Tracking stopped."), false);
         }
+    }
+
+    private static String[] getOnlinePlayerNames(Minecraft client, LocalPlayer player) {
+        if (client == null || client.level == null) {
+            return new String[0];
+        }
+
+        String selfName = cleanName(getRealPlayerName(player));
+        List<String> names = new ArrayList<>();
+
+        for (AbstractClientPlayer other : client.level.players()) {
+            if (other == null || other == player) {
+                continue;
+            }
+
+            String otherName = getRealPlayerName(other);
+
+            if (!isUsableName(otherName) || cleanName(otherName).equals(selfName)) {
+                continue;
+            }
+
+            names.add(otherName);
+        }
+
+        return names.toArray(new String[0]);
+    }
+
+    private static String getAttackerFromRecentChat(String recentChat, String[] onlinePlayerNames, String selfName) {
+        if (recentChat == null || recentChat.isBlank() || onlinePlayerNames == null || onlinePlayerNames.length == 0) {
+            return "Unknown";
+        }
+
+        String normalizedSelfName = normalizeForNameMatch(selfName);
+        String bestMatch = "Unknown";
+        int bestLength = -1;
+
+        String[] lines = recentChat.split("\\R");
+
+        for (String line : lines) {
+            String normalizedLine = " " + normalizeForNameMatch(line) + " ";
+
+            if (!looksLikeDeathChatLine(normalizedLine)) {
+                continue;
+            }
+
+            boolean mentionsSelf = !normalizedSelfName.isBlank() && normalizedLine.contains(" " + normalizedSelfName + " ");
+            boolean saysYou = normalizedLine.contains(" you ");
+
+            if (!mentionsSelf && !saysYou) {
+                continue;
+            }
+
+            for (String playerName : onlinePlayerNames) {
+                String normalizedPlayerName = normalizeForNameMatch(playerName);
+
+                if (normalizedPlayerName.isBlank() || normalizedPlayerName.equals(normalizedSelfName)) {
+                    continue;
+                }
+
+                boolean found = normalizedLine.contains(" " + normalizedPlayerName + " ");
+
+                if (found && normalizedPlayerName.length() > bestLength) {
+                    bestMatch = playerName;
+                    bestLength = normalizedPlayerName.length();
+                }
+            }
+        }
+
+        return bestMatch;
+    }
+
+    private static boolean looksLikeDeathChatLine(String normalizedLine) {
+        if (normalizedLine == null || normalizedLine.isBlank()) {
+            return false;
+        }
+
+        String[] markers = {
+                " killed ",
+                " killed by ",
+                " slain ",
+                " slain by ",
+                " shot ",
+                " shot by ",
+                " murdered ",
+                " eliminated ",
+                " finished ",
+                " died ",
+                " death ",
+                " combat ",
+                " void "
+        };
+
+        for (String marker : markers) {
+            if (normalizedLine.contains(marker)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static String getAttackerName(Minecraft client, LocalPlayer player) {
@@ -164,20 +347,22 @@ public final class OreTrackerDeathTracker {
             return direct;
         }
 
-        String deathMessage = getAttackerFromDeathMessage(player);
+        String deathMessage = getAttackerFromDeathMessage(client, player);
 
         if (!deathMessage.equals("Unknown")) {
             return deathMessage;
         }
 
-        if (!cachedAttacker.equals("Unknown") && System.currentTimeMillis() - cachedAttackerTime <= 15000L) {
+        if (!cachedAttacker.equals("Unknown") && System.currentTimeMillis() - cachedAttackerTime <= ATTACKER_CACHE_MS) {
             return cachedAttacker;
         }
 
-        String nearest = getNearestPlayer(client, player);
+        if (ALLOW_NEAREST_PLAYER_FALLBACK) {
+            String nearest = getNearestPlayer(client, player);
 
-        if (!nearest.equals("Unknown")) {
-            return nearest;
+            if (!nearest.equals("Unknown")) {
+                return nearest;
+            }
         }
 
         return "Unknown";
@@ -254,7 +439,7 @@ public final class OreTrackerDeathTracker {
 
             double distance = other.distanceTo(player);
 
-            if (distance < closestDistance && distance <= 16.0D) {
+            if (distance < closestDistance && distance <= NEAREST_PLAYER_FALLBACK_RANGE) {
                 closest = other;
                 closestDistance = distance;
             }
@@ -293,6 +478,32 @@ public final class OreTrackerDeathTracker {
         }
 
         return "Unknown";
+    }
+
+    private static String cleanDiscordUserId(String input) {
+        if (input == null) {
+            return "";
+        }
+
+        String cleaned = input.trim().replaceAll("[^0-9]", "");
+
+        if (cleaned.length() < 17 || cleaned.length() > 20) {
+            return "";
+        }
+
+        return cleaned;
+    }
+
+    public static String getSavedDiscordUserIdForUi() {
+        return trackedDiscordUserId == null ? "" : trackedDiscordUserId;
+    }
+
+    private static String readSavedDiscordUserId() {
+        return trackedDiscordUserId == null ? "" : trackedDiscordUserId;
+    }
+
+    private static void writeSavedDiscordUserId(String discordUserId) {
+        trackedDiscordUserId = cleanDiscordUserId(discordUserId);
     }
 
     private static String getRealPlayerName(AbstractClientPlayer player) {
@@ -344,7 +555,96 @@ public final class OreTrackerDeathTracker {
         return result == null ? "" : String.valueOf(result);
     }
 
-    private static String getAttackerFromDeathMessage(LocalPlayer player) {
+    private static Object callStatic(Class<?> clazz, String methodName) {
+        if (clazz == null) {
+            return null;
+        }
+
+        try {
+            Method method = clazz.getMethod(methodName);
+            method.setAccessible(true);
+            return method.invoke(null);
+        } catch (Exception ignored) {
+        }
+
+        try {
+            Method method = clazz.getDeclaredMethod(methodName);
+            method.setAccessible(true);
+            return method.invoke(null);
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private static boolean invokeStatic(Class<?> clazz, String methodName, Class<?>[] parameterTypes, Object... args) {
+        if (clazz == null) {
+            return false;
+        }
+
+        try {
+            Method method = clazz.getMethod(methodName, parameterTypes);
+            method.setAccessible(true);
+            method.invoke(null, args);
+            return true;
+        } catch (Exception ignored) {
+        }
+
+        try {
+            Method method = clazz.getDeclaredMethod(methodName, parameterTypes);
+            method.setAccessible(true);
+            method.invoke(null, args);
+            return true;
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+    private static Object getField(Object object, String fieldName) {
+        if (object == null || fieldName == null) {
+            return null;
+        }
+
+        try {
+            java.lang.reflect.Field field = object.getClass().getField(fieldName);
+            field.setAccessible(true);
+            return field.get(object);
+        } catch (Exception ignored) {
+        }
+
+        try {
+            java.lang.reflect.Field field = object.getClass().getDeclaredField(fieldName);
+            field.setAccessible(true);
+            return field.get(object);
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private static boolean setField(Object object, String fieldName, Object value) {
+        if (object == null || fieldName == null) {
+            return false;
+        }
+
+        try {
+            java.lang.reflect.Field field = object.getClass().getField(fieldName);
+            field.setAccessible(true);
+            field.set(object, value);
+            return true;
+        } catch (Exception ignored) {
+        }
+
+        try {
+            java.lang.reflect.Field field = object.getClass().getDeclaredField(fieldName);
+            field.setAccessible(true);
+            field.set(object, value);
+            return true;
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+
+    private static String getAttackerFromDeathMessage(Minecraft client, LocalPlayer player) {
         String message;
         String selfOriginal = getRealPlayerName(player);
         String selfName = cleanName(selfOriginal);
@@ -360,6 +660,18 @@ public final class OreTrackerDeathTracker {
         }
 
         String cleanedMessage = stripFormatting(message).trim();
+
+        /*
+         * First try to match the death message against actual online players.
+         * This is much safer than pulling random text after "by" and much safer
+         * than using proximity.
+         */
+        String onlinePlayer = getOnlinePlayerFromText(client, player, cleanedMessage);
+
+        if (!onlinePlayer.equals("Unknown")) {
+            return onlinePlayer;
+        }
+
         String lower = cleanedMessage.toLowerCase(Locale.ROOT);
 
         String[] splitWords = {
@@ -385,6 +697,58 @@ public final class OreTrackerDeathTracker {
         }
 
         return "Unknown";
+    }
+
+    private static String getOnlinePlayerFromText(Minecraft client, LocalPlayer player, String text) {
+        if (client == null || client.level == null || text == null || text.isBlank()) {
+            return "Unknown";
+        }
+
+        String normalizedText = " " + normalizeForNameMatch(text) + " ";
+        String selfName = cleanName(getRealPlayerName(player));
+
+        String bestMatch = "Unknown";
+        int bestLength = -1;
+
+        for (AbstractClientPlayer other : client.level.players()) {
+            if (other == null || other == player) {
+                continue;
+            }
+
+            String otherName = getRealPlayerName(other);
+            String cleanedOtherName = cleanName(otherName);
+
+            if (!isUsableName(cleanedOtherName) || cleanedOtherName.equals(selfName)) {
+                continue;
+            }
+
+            String normalizedOtherName = normalizeForNameMatch(cleanedOtherName);
+
+            if (normalizedOtherName.isBlank()) {
+                continue;
+            }
+
+            boolean found = normalizedText.contains(" " + normalizedOtherName + " ");
+
+            if (found && normalizedOtherName.length() > bestLength) {
+                bestMatch = otherName;
+                bestLength = normalizedOtherName.length();
+            }
+        }
+
+        return bestMatch;
+    }
+
+    private static String normalizeForNameMatch(String input) {
+        if (input == null) {
+            return "";
+        }
+
+        return stripFormatting(input)
+                .toLowerCase(Locale.ROOT)
+                .replaceAll("[^a-z0-9_]+", " ")
+                .replaceAll("\\s+", " ")
+                .trim();
     }
 
     private static String trimAttacker(String input, String selfOriginal, String selfName) {

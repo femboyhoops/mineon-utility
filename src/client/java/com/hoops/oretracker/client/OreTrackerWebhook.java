@@ -1,97 +1,173 @@
 package com.hoops.oretracker.client;
 
-import com.google.gson.Gson;
-
-import java.io.OutputStream;
-import java.net.HttpURLConnection;
-import java.net.URL;
-import java.nio.charset.StandardCharsets;
-import java.util.LinkedHashMap;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
+import java.util.Locale;
+import java.util.concurrent.CompletableFuture;
 
 public final class OreTrackerWebhook {
-    private static final Gson GSON = new Gson();
+    private static final HttpClient HTTP = HttpClient.newHttpClient();
 
     private OreTrackerWebhook() {
     }
 
-    public static void sendStart(String webhookUrl, String time, String trackedPlayer) {
-        Map<String, Object> embed = new LinkedHashMap<>();
-        embed.put("title", "Ore Tracker Started");
-        embed.put("description", "Starting tracking.");
-        embed.put("color", 0x8B5CF6);
-
-        embed.put("fields", List.of(
-                field("Player", "`" + safe(trackedPlayer) + "`", true),
-                field("Started At", "`" + safe(time) + "`", true),
-                field("Status", "`Tracking Active`", true)
-        ));
-
-        sendEmbed(webhookUrl, embed);
+    public static void sendStart(String webhook, String time, String playerName) {
+        sendStart(webhook, time, playerName, "");
     }
 
-    public static void sendStop(String webhookUrl, String time, String trackedPlayer) {
-        Map<String, Object> embed = new LinkedHashMap<>();
-        embed.put("title", "Ore Tracker Stopped");
-        embed.put("description", "Tracking was stopped manually.");
-        embed.put("color", 0xF59E0B);
-
-        embed.put("fields", List.of(
-                field("Player", "`" + safe(trackedPlayer) + "`", true),
-                field("Stopped At", "`" + safe(time) + "`", true),
-                field("Status", "`Tracking Inactive`", true)
-        ));
-
-        sendEmbed(webhookUrl, embed);
+    public static void sendStart(String webhook, String time, String playerName, String discordUserId) {
+        sendEmbed(
+                webhook,
+                discordUserId,
+                "Ore Tracker Started",
+                "Tracking is now active for **" + safe(playerName) + "**.",
+                0x2ECC71,
+                field("Time", safe(time), false)
+        );
     }
 
-    public static void sendDeath(String webhookUrl, String time, String trackedPlayer, String attacker, String resourcesSummary) {
-        Map<String, Object> embed = new LinkedHashMap<>();
-        embed.put("title", "Ore Tracker Death Log");
-        embed.put("description", "Tracking has stopped automatically.");
-        embed.put("color", 0xEF4444);
-
-        embed.put("fields", List.of(
-                field("Player", "`" + safe(trackedPlayer) + "`", true),
-                field("Time of Death", "`" + safe(time) + "`", true),
-                field("Killed By", "`" + safe(attacker) + "`", true),
-                field("Resources", resourcesSummary == null || resourcesSummary.isBlank() ? "`None detected`" : resourcesSummary, false)
-        ));
-
-        sendEmbed(webhookUrl, embed);
+    public static void sendStop(String webhook, String time, String playerName) {
+        sendStop(webhook, time, playerName, "");
     }
 
-    public static void sendPlain(String webhookUrl, String content) {
-        if (!isValidWebhook(webhookUrl)) {
+    public static void sendStop(String webhook, String time, String playerName, String discordUserId) {
+        sendEmbed(
+                webhook,
+                discordUserId,
+                "Ore Tracker Stopped",
+                "Tracking has been stopped for **" + safe(playerName) + "**.",
+                0x95A5A6,
+                field("Time", safe(time), false)
+        );
+    }
+
+    public static void sendDeath(String webhook, String time, String playerName, String attacker, String resources) {
+        sendDeath(webhook, time, playerName, attacker, resources, "");
+    }
+
+    public static void sendDeath(String webhook, String time, String playerName, String attacker, String resources, String discordUserId) {
+        sendDeath(webhook, time, playerName, attacker, resources, discordUserId, "");
+    }
+
+    public static void sendDeath(String webhook, String time, String playerName, String attacker, String resources, String discordUserId, String recentChat) {
+        List<String> fields = new ArrayList<>();
+        fields.add(field("Killed By", safe(attacker), true));
+        fields.add(field("Time", safe(time), true));
+        fields.add(field("Resources Carried", safe(resources), false));
+
+        if (recentChat != null && !recentChat.isBlank()) {
+            fields.add(field("Recent Chat Context", recentChat, false));
+        }
+
+        sendEmbed(
+                webhook,
+                discordUserId,
+                "Death Logged",
+                "**" + safe(playerName) + "** died while tracking.",
+                0xE74C3C,
+                fields.toArray(new String[0])
+        );
+    }
+
+    public static void sendDamageWarning(String webhook, String time, String playerName, float health, String discordUserId) {
+        String healthText = String.format(Locale.ROOT, "%.1f / 20.0", Math.max(0.0f, health));
+
+        sendEmbed(
+                webhook,
+                discordUserId,
+                "Mining Alignment Warning",
+                "Damage was detected while tracking. Your aim may have been knocked off line, so your automine target should be checked.",
+                0xA855F7,
+                field("Player", safe(playerName), true),
+                field("Health", healthText, true),
+                field("Time", safe(time), true)
+        );
+    }
+
+    private static void sendEmbed(String webhook, String discordUserId, String title, String description, int color, String... fields) {
+        if (webhook == null || webhook.isBlank()) {
             return;
         }
 
-        Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("username", "Ore Tracker");
-        payload.put("content", content);
+        String cleanedDiscordUserId = cleanDiscordUserId(discordUserId);
+        String content = cleanedDiscordUserId.isBlank() ? "" : "<@" + cleanedDiscordUserId + ">";
+        String allowedUsers = cleanedDiscordUserId.isBlank() ? "[]" : "[\"" + cleanedDiscordUserId + "\"]";
 
-        sendPayload(webhookUrl.trim(), payload);
-    }
+        StringBuilder fieldJson = new StringBuilder();
 
-    private static void sendEmbed(String webhookUrl, Map<String, Object> embed) {
-        if (!isValidWebhook(webhookUrl)) {
-            return;
+        for (String field : fields) {
+            if (field == null || field.isBlank()) {
+                continue;
+            }
+
+            if (fieldJson.length() > 0) {
+                fieldJson.append(',');
+            }
+
+            fieldJson.append(field);
         }
 
-        Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("username", "Ore Tracker");
-        payload.put("embeds", List.of(embed));
+        String payload = """
+                {
+                  "username": "Ore Tracker",
+                  "content": "%s",
+                  "allowed_mentions": {
+                    "parse": [],
+                    "users": %s
+                  },
+                  "embeds": [
+                    {
+                      "title": "%s",
+                      "description": "%s",
+                      "color": %d,
+                      "fields": [%s]
+                    }
+                  ]
+                }
+                """.formatted(
+                escapeJson(content),
+                allowedUsers,
+                escapeJson(title),
+                escapeJson(description),
+                color,
+                fieldJson
+        );
 
-        sendPayload(webhookUrl.trim(), payload);
+        sendJson(webhook, payload);
     }
 
-    private static Map<String, Object> field(String name, String value, boolean inline) {
-        Map<String, Object> field = new LinkedHashMap<>();
-        field.put("name", name);
-        field.put("value", value);
-        field.put("inline", inline);
-        return field;
+    private static String field(String name, String value, boolean inline) {
+        return "{\"name\":\"" + escapeJson(name) + "\",\"value\":\"" + escapeJson(clampFieldValue(value == null || value.isBlank() ? "Unknown" : value)) + "\",\"inline\":" + inline + "}";
+    }
+
+    private static String clampFieldValue(String value) {
+        if (value == null) {
+            return "Unknown";
+        }
+
+        if (value.length() <= 1000) {
+            return value;
+        }
+
+        return value.substring(0, 997).trim() + "...";
+    }
+
+    private static void sendJson(String webhook, String payload) {
+        CompletableFuture.runAsync(() -> {
+            try {
+                HttpRequest request = HttpRequest.newBuilder(URI.create(webhook))
+                        .header("Content-Type", "application/json")
+                        .POST(HttpRequest.BodyPublishers.ofString(payload))
+                        .build();
+
+                HTTP.send(request, HttpResponse.BodyHandlers.discarding());
+            } catch (Exception ignored) {
+            }
+        });
     }
 
     private static String safe(String value) {
@@ -99,53 +175,51 @@ public final class OreTrackerWebhook {
             return "Unknown";
         }
 
-        return value
-                .replace("`", "'")
-                .replace("@", "@\u200B")
-                .trim();
+        return value;
     }
 
-    private static boolean isValidWebhook(String webhookUrl) {
-        if (webhookUrl == null || webhookUrl.isBlank()) {
-            return false;
+    private static String cleanDiscordUserId(String input) {
+        if (input == null) {
+            return "";
         }
 
-        String trimmed = webhookUrl.trim();
+        String cleaned = input.trim().replaceAll("[^0-9]", "");
 
-        return trimmed.startsWith("https://discord.com/api/webhooks/")
-                || trimmed.startsWith("https://discordapp.com/api/webhooks/");
+        if (cleaned.length() < 17 || cleaned.length() > 20) {
+            return "";
+        }
+
+        return cleaned;
     }
 
-    private static void sendPayload(String webhookUrl, Map<String, Object> payload) {
-        Thread thread = new Thread(() -> sendBlocking(webhookUrl, payload), "OreTracker-DiscordWebhook");
-        thread.setDaemon(true);
-        thread.start();
-    }
+    private static String escapeJson(String input) {
+        if (input == null) {
+            return "";
+        }
 
-    private static void sendBlocking(String webhookUrl, Map<String, Object> payload) {
-        HttpURLConnection connection = null;
+        StringBuilder escaped = new StringBuilder(input.length() + 16);
 
-        try {
-            URL url = new URL(webhookUrl);
-            connection = (HttpURLConnection) url.openConnection();
+        for (int i = 0; i < input.length(); i++) {
+            char c = input.charAt(i);
 
-            connection.setRequestMethod("POST");
-            connection.setRequestProperty("Content-Type", "application/json; charset=UTF-8");
-            connection.setRequestProperty("User-Agent", "OreTracker");
-            connection.setDoOutput(true);
-
-            byte[] body = GSON.toJson(payload).getBytes(StandardCharsets.UTF_8);
-
-            try (OutputStream outputStream = connection.getOutputStream()) {
-                outputStream.write(body);
-            }
-
-            connection.getResponseCode();
-        } catch (Exception ignored) {
-        } finally {
-            if (connection != null) {
-                connection.disconnect();
+            switch (c) {
+                case '\\' -> escaped.append("\\\\");
+                case '"' -> escaped.append("\\\"");
+                case '\b' -> escaped.append("\\b");
+                case '\f' -> escaped.append("\\f");
+                case '\n' -> escaped.append("\\n");
+                case '\r' -> escaped.append("\\r");
+                case '\t' -> escaped.append("\\t");
+                default -> {
+                    if (c < 0x20) {
+                        escaped.append(String.format("\\u%04x", (int) c));
+                    } else {
+                        escaped.append(c);
+                    }
+                }
             }
         }
+
+        return escaped.toString();
     }
 }
