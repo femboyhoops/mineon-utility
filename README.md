@@ -2,7 +2,7 @@
 
 Ore Tracker is a client-side Fabric mod for Minecraft 1.21.11 that tracks ore progress toward mine shop upgrades.
 
-It includes a mine/shop selector, category tracking, a customizable HUD, and optional Discord webhook death tracking.
+It includes a mine/shop selector, category tracking, a customizable HUD, saved client settings, and optional Discord webhook tracking for deaths, damage warnings, inventory resources, and recent chat context.
 
 ## Features
 
@@ -16,7 +16,11 @@ It includes a mine/shop selector, category tracking, a customizable HUD, and opt
 * Saved client settings between Minecraft reloads
 * Configurable shop prices through `shops.json`
 * Discord webhook death tracking
-* Death logs include start time, death time, killer, and inventory resources
+* Optional Discord user ID ping support
+* Damage warning webhook alerts
+* Death logs include start time, death time, killer, inventory resources, and recent chat context
+* Recent chat context helps identify killers when Minecraft reports `Unknown`
+* Client-side only
 
 ## Commands
 
@@ -31,6 +35,7 @@ It includes a mine/shop selector, category tracking, a customizable HUD, and opt
 | `/otreload`     | Reload config                           |
 | `/otdebug`      | Print detected inventory item names     |
 | `/track`        | Open Discord webhook death-tracking GUI |
+| `/tracker`      | Open Discord webhook death-tracking GUI |
 | `/stoptracking` | Stop death tracking manually            |
 
 ## HUD Commands
@@ -120,7 +125,7 @@ C  = Compressed
 N  = Normal
 ```
 
-## Discord Death Tracking
+## Discord Tracking
 
 Use:
 
@@ -128,22 +133,53 @@ Use:
 /track
 ```
 
-This opens the death-tracking GUI. Paste a Discord webhook URL and press **Start Tracking**.
+or:
 
-When tracking starts, Ore Tracker sends a Discord message with the start time.
+```txt
+/tracker
+```
+
+This opens the Discord tracking GUI.
+
+Paste a Discord webhook URL and press **Start Tracking**.
+
+You may also enter a Discord user ID. This is optional. If provided, Ore Tracker will mention that user in Discord webhook alerts.
+
+Discord user IDs must be numeric, not usernames.
+
+Example Discord mention format:
+
+```txt
+<@123456789012345678>
+```
+
+Ore Tracker handles the mention formatting automatically. You only need to paste the numeric user ID.
+
+## Discord Death Reports
+
+When tracking starts, Ore Tracker sends a Discord message with:
+
+* Player name
+* Start time
+* Optional Discord user ping
 
 When you die, Ore Tracker sends another Discord message with:
 
 * Time of death
 * Player who killed you, when detectable
-* Inventory resources:
+* Inventory resources
+* Recent chat context
 
-  * HC
-  * MC
-  * UC
-  * SC
-  * C
-  * N
+Inventory resources are shown as:
+
+```txt
+HC = Hyper Compressed
+MC = Mega Compressed
+UC = Ultra Compressed
+SC = Super Compressed
+C  = Compressed
+N  = Normal
+```
 
 Tracking automatically stops after death.
 
@@ -153,11 +189,54 @@ Use this to stop manually:
 /stoptracking
 ```
 
+## Damage Warnings
+
+While tracking is active, Ore Tracker sends a Discord warning when you take damage.
+
+This is useful for automining because damage can knock your aim or position off the block you were mining.
+
+Damage warnings include:
+
+* Player name
+* Current health
+* Time
+* Optional Discord user ping
+
+Damage warnings use a cooldown to avoid flooding the webhook from repeated damage sources like fire, lava, poison, or rapid hits.
+
+## Recent Chat Context
+
+Death reports include a small amount of recent chat context.
+
+This helps when the client cannot directly detect the killer. Some servers send the actual death message through chat, while Minecraft’s client-side damage source may still report the killer as `Unknown`.
+
+Ore Tracker keeps the chat context limited so Discord messages do not get flooded.
+
+## Killer Detection
+
+Ore Tracker attempts to detect the killer using:
+
+1. Minecraft client-side damage source data
+2. Minecraft death message data
+3. Recent cached attacker data
+4. Recent chat context
+
+Ore Tracker avoids blindly blaming the nearest player, because that can create false reports.
+
+If the killer cannot be detected reliably, Ore Tracker may show:
+
+```txt
+Unknown
+```
+
+This is expected on some servers because killer data is not always exposed cleanly to client-side mods.
+
 ## Saved Settings
 
 Ore Tracker saves client settings between Minecraft reloads, including:
 
 * Discord webhook
+* Discord user ID
 * HUD visibility
 * HUD mode
 * HUD position
@@ -204,6 +283,8 @@ It does not scan:
 * Offhand
 
 Death-killer detection is client-side. On some servers, the server may not expose the exact killer to the client, so the killer may occasionally show as `Unknown`.
+
+Recent chat context is included in death reports to help with those cases.
 
 ## License
 
