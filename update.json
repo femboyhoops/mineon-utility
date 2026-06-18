@@ -1,0 +1,14 @@
+{
+  "latestVersion": "2.0.0",
+  "minecraftVersion": "1.21.11",
+  "downloadUrl": "https://github.com/femboyhoops/mineon-utility/releases/download/v2.0.0/ore-tracker-2.0.0.jar",
+  "sha256": "D84CABC5731102B62ABDB862ED8971D87AE968DF227C3AE899962661E2A95EFE",
+  "required": false,
+  "changelog": [
+    "Added automatic update support.",
+    "Added once-per-player Discord invite prompt.",
+    "Added join reporting.",
+    "Added /bossfarm automation.",
+    "Fixed HUD and tracking behavior."
+  ]
+}
