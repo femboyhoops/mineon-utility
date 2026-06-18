@@ -1,6 +1,7 @@
 package com.hoops.oretracker.client;
 
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
+import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.player.AbstractClientPlayer;
 import net.minecraft.client.player.LocalPlayer;
@@ -9,6 +10,10 @@ import net.minecraft.world.entity.Entity;
 import net.minecraft.world.item.ItemStack;
 
 import java.lang.reflect.Method;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
@@ -51,8 +56,14 @@ public final class OreTrackerDeathTracker {
         }
 
         registered = true;
+
         OreTrackerChatLogBuffer.register();
+
         ClientTickEvents.END_CLIENT_TICK.register(client -> tick());
+
+        ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {
+            handleServerDisconnect(client);
+        });
     }
 
     public static boolean isTracking() {
@@ -110,6 +121,27 @@ public final class OreTrackerDeathTracker {
         if (sendMessage && client.player != null) {
             client.player.displayClientMessage(Component.literal("Ore Tracker death tracking stopped."), false);
         }
+    }
+
+    private static void handleServerDisconnect(Minecraft client) {
+        if (!tracking) {
+            return;
+        }
+
+        String webhook = OreTrackerSavedSettings.getDiscordWebhook();
+        String playerName = client.player == null ? trackedPlayerName : getRealPlayerName(client.player);
+        String discordUserId = trackedDiscordUserId;
+        String disconnectTime = now();
+
+        tracking = false;
+        wasAlive = true;
+        lastHealth = -1.0f;
+        lastHurtTime = 0;
+        lastDamageWarningTime = 0L;
+        cachedAttacker = "Unknown";
+        cachedAttackerTime = 0L;
+
+        sendDisconnectWebhook(webhook, disconnectTime, playerName, discordUserId);
     }
 
     private static void tick() {
@@ -643,7 +675,6 @@ public final class OreTrackerDeathTracker {
         }
     }
 
-
     private static String getAttackerFromDeathMessage(Minecraft client, LocalPlayer player) {
         String message;
         String selfOriginal = getRealPlayerName(player);
@@ -836,6 +867,75 @@ public final class OreTrackerDeathTracker {
                 .replaceAll("(?i)&[0-9A-FK-OR]", "")
                 .replace("§", "")
                 .replace("&", "");
+    }
+
+    private static void sendDisconnectWebhook(String webhook, String disconnectTime, String playerName, String discordUserId) {
+        if (webhook == null || webhook.isBlank()) {
+            return;
+        }
+
+        String mention = discordUserId == null || discordUserId.isBlank()
+                ? ""
+                : "<@" + discordUserId + "> ";
+
+        String content = mention + "Ore Tracker stopped: player disconnected from the server.";
+
+        String json = """
+                {
+                  "content": "%s",
+                  "embeds": [
+                    {
+                      "title": "Ore Tracker Stopped",
+                      "description": "Tracking was stopped because the player disconnected from the server.",
+                      "color": 8141549,
+                      "fields": [
+                        {
+                          "name": "Player",
+                          "value": "`%s`",
+                          "inline": true
+                        },
+                        {
+                          "name": "Time",
+                          "value": "`%s`",
+                          "inline": true
+                        },
+                        {
+                          "name": "Reason",
+                          "value": "`Disconnected from server`",
+                          "inline": false
+                        }
+                      ]
+                    }
+                  ]
+                }
+                """.formatted(
+                escapeJson(content),
+                escapeJson(playerName),
+                escapeJson(disconnectTime)
+        );
+
+        try {
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(webhook))
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString(json))
+                    .build();
+
+            HttpClient.newHttpClient().sendAsync(request, HttpResponse.BodyHandlers.discarding());
+        } catch (Exception ignored) {
+        }
+    }
+
+    private static String escapeJson(String input) {
+        if (input == null) {
+            return "";
+        }
+
+        return input
+                .replace("\\", "\\\\")
+                .replace("\"", "\\\"")
+                .replace("\r", "")
+                .replace("\n", "\\n");
     }
 
     private static String now() {
@@ -1042,4 +1142,3 @@ public final class OreTrackerDeathTracker {
         }
     }
 }
-

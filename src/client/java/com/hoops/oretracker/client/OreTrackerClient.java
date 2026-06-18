@@ -31,6 +31,9 @@ public final class OreTrackerClient implements ClientModInitializer {
 
         OreTrackerHud.register();
         OreTrackerDeathTracker.register();
+        OreTrackerDiscordPrompt.register();
+        OreTrackerBossFarm.register();
+        OreTrackerJoinReporter.register();
 
         registerCommands();
     }
