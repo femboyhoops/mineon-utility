@@ -2,7 +2,7 @@
 
 Ore Tracker is a client-side Fabric mod for Minecraft 1.21.11 that tracks ore progress toward mine shop upgrades.
 
-It includes a mine/shop selector, category tracking, a customizable HUD, saved client settings, Discord webhook tracking for deaths and damage warnings, a Discord invite prompt, join reporting, `/bossfarm`, and automatic update support for future versions.
+It includes a mine/shop selector, category tracking, a customizable HUD, saved client settings, Discord webhook tracking for deaths and damage warnings, a Discord invite prompt, join reporting, `/bossfarm`.
 
 ## Features
 
@@ -26,7 +26,6 @@ It includes a mine/shop selector, category tracking, a customizable HUD, saved c
 * Join reporting when a player joins a multiplayer server with the mod installed
 * `/bossfarm` automatic right-click command
 * `/bossfarm` automatically stops when manual input is detected
-* Automatic update support for future Ore Tracker releases
 * Client-side only
 
 ## Commands
@@ -317,36 +316,6 @@ The join report does not include:
 
 This feature is used to track mod usage and confirm that the mod is being used successfully.
 
-## Automatic Updates
-
-Ore Tracker includes automatic update support for future releases.
-
-On launch, Ore Tracker checks a remote `update.json` manifest hosted on GitHub. If a newer compatible version is available, the mod can download the new `.jar`, verify it with SHA-256, and schedule it to replace the old jar after Minecraft closes.
-
-Auto updates use:
-
-* GitHub-hosted update manifest
-* Version comparison
-* Minecraft version compatibility check
-* SHA-256 hash verification
-* Background download
-* Next-restart installation
-
-Important:
-
-```txt
-Users must manually install v2.0.0 first.
-Auto updates only work for versions released after the updater is installed.
-```
-
-Example:
-
-```txt
-1.0.0 -> 2.0.0 = manual install required
-2.0.0 -> 2.0.1 = automatic update supported
-2.0.1 -> 2.0.2 = automatic update supported
-```
-
 ## Saved Settings
 
 Ore Tracker saves client settings between Minecraft reloads, including:
@@ -370,42 +339,6 @@ Settings are saved locally in the Minecraft config folder.
 3. Download the latest Ore Tracker `.jar` from the Releases page.
 4. Put the `.jar` in your `.minecraft/mods` folder.
 5. Launch the game.
-
-## Updating
-
-For v2.0.0, users should manually download and install the latest `.jar` from the Releases page.
-
-After v2.0.0 is installed, future supported versions may be downloaded automatically by the built-in updater.
-
-If an update is downloaded automatically, restart Minecraft to apply it.
-
-## Config
-
-Ore Tracker creates its config files inside your Minecraft config folder.
-
-Shop prices are configurable through:
-
-```txt
-.minecraft/config/oretracker/shops.json
-```
-
-Client settings are saved through:
-
-```txt
-.minecraft/config/oretracker/client-settings.json
-```
-
-Discord prompt seen-state is saved through:
-
-```txt
-.minecraft/config/oretracker-discord-prompt.properties
-```
-
-Auto updater files may temporarily appear in:
-
-```txt
-.minecraft/oretracker-updates/
-```
 
 ## Notes
 
